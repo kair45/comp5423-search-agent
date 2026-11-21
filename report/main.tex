@@ -1,0 +1,120 @@
+\documentclass[sigconf]{acmart}
+\setcopyright{none}
+\settopmatter{printacmref=false,printfolios=true}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\acmConference[COMP5423]{COMP5423}{Fall 2026}{Hong Kong}
+\acmYear{2026}\acmDOI{}\acmISBN{}
+\usepackage{booktabs}
+\input{generated}
+\begin{document}
+\title{Evidence Search: Skill-Augmented Retrieval over a Fixed Collection}
+\author{\ReportGroup}
+\affiliation{\institution{The Hong Kong Polytechnic University}\country{Hong Kong}}
+\renewcommand{\shortauthors}{COMP5423 group project}
+\begin{abstract}
+We implement a search agent over the 100,195 documents of BrowseComp-Plus. One tool combines lexical, encoder-based and instruction-aware retrieval; a second opens original text around a position, and a third loads a procedure selected by the model. Document IDs and character offsets connect search results to their source. This report separates retrieval coverage from final answer accuracy. It describes how evidence, calls and provider-reported usage can be traced back to a specific question. \RunStatus
+\end{abstract}
+\maketitle
+\section{System design}
+The course task asks for short answers to questions whose clues may refer to different documents. A first search can identify an institution without identifying the work, event or person that the question actually requests. Our implementation preserves the original question throughout the run, so that an intermediate entity can become the next query without replacing the requested answer. Evidence is restricted to the fixed course collection \cite{browse}. URLs identify the origin of stored documents. No live webpage fetch is part of the search tool.
+
+\begin{figure}[h]
+\centering
+\small\begin{tabular}{@{}c@{}}
+\toprule
+Question ID and original question\\
+$\downarrow$\\
+DeepSeek-V4-Flash: inspect current evidence and choose an action\\
+$\downarrow$\\
+\texttt{search} \quad / \quad \texttt{read\_document} \quad / \quad \texttt{load\_skill}\\
+$\downarrow$\\
+Record actual call and result; update evidence and open constraints\\
+$\downarrow$\\
+Missing or conflicting fact? Return to model with updated state.\\
+Supported answer or budget reached? Request final short answer.\\
+$\downarrow$\\
+Committed prediction, chronological trajectory, usage totals\\
+\bottomrule
+\end{tabular}
+\caption{One question through the system. The return from the evidence update to the decision step permits a query that could not be formed from the original wording alone.}
+\end{figure}
+
+\subsection{Data and reproducibility}
+The validation file contains 100 labeled questions. The separate test file contains 100 question IDs and questions. The answer runner reads only the ID and question in either case. A separate scorer reads validation references after retrieval or prediction. Source documents are stored with their original IDs and URLs, and compressed losslessly in SQLite. Full-text retrieval and embedding lookup both return original document identities. A digest of their ordered IDs connects each dense index to its lexical store.
+
+The interface, batch runner and interactive command share the same retrieval component. The interactive and batch agent moreover share the decision loop, prompt, tool definitions and accounting. Per-question checkpoints allow a process that already received an assistant response to finish outstanding local tools when restarted. A completed batch is written to a temporary file and atomically published after all questions have produced records. These features address missing records and repeated API requests during long runs.
+\subsection{Evidence and accounting boundaries}
+A document ID persists across retrieval backends. SQLite stores the original text once, while the vector side tables retain a mapping from similarity-search positions to corpus IDs. Search windows also carry start and end positions in the decoded document. These positions make it possible to check that a passage is an unmodified span even if the title is shared by several pages. A source URL supplements the ID when inspecting an answer.
+
+We treat model requests, tool invocations and local retrieval operations as different units. A single model response can invoke a tool, and one search invocation internally scores three indexes. Only the model-issued tool invocation increments the tool-call total. The provider's actual usage for that response increments the token total. Reading a source and asking the model to finish therefore add different costs. A final answer requires one more model response even when it involves no new tools.
+
+\begin{table}[h]\centering\caption{Where each output is produced and independently checked.}\small\begin{tabular}{ll}\toprule Output & Check\\\midrule
+Source quotation & Slice original source by offsets\\
+Tool result & Match assistant call ID and name\\
+API token total & Sum all response usage records\\
+Submitted answer & Match final assistant message\\
+Test coverage & Match all 100 unique input IDs\\\bottomrule\end{tabular}\end{table}
+\clearpage
+\section{Retrieval design and results}
+\subsection{Candidate generation}
+BM25 runs over the full document text using SQLite FTS5. Tokens drawn from the query are quoted and joined as alternatives, which preserves a rare name even when the remaining clues do not co-occur. Broad, common terms can still outrank a rare clue in a very long question. The agent can use shorter queries in subsequent steps.
+
+The encoder route uses multilingual E5-small \cite{e5}. We prepend the task-specific query and passage prefixes, pool the final hidden states over non-padding positions and normalize the result. To fit the laptop build, each document contributes up to two character-anchored windows: an opening window and, for sufficiently long documents, a second near the midpoint. Short documents use one. The resulting \ECount{} passage vectors retain the parent ID and offsets. A configurable exhaustive mode can instead index overlapping windows. Our measurements use the bounded build. This trades some recall in long articles for tractable computation. Full-text BM25 and within-document reading retain access to the complete document.
+
+The instruction-aware route uses the published Qwen3-Embedding-0.6B corpus vectors and a local query encoder \cite{qwen}. A task description and query are formatted in the model's instruction/query format. The final token is pooled and normalized. Before loading a published shard the importer checks its digest against the download manifest. It verifies vector dimensions and a one-to-one match with the fixed corpus IDs.
+
+\subsection{Fusion and evidence selection}
+Each method supplies up to 30 distinct document IDs. Repeated E5 passage hits collapse to one document. For document \(d\), the fusion score is \(\sum_m 1/(60+r_m(d))\), where \(r_m\) is the rank in method \(m\); absent documents contribute zero. The top five documents are returned. Within each candidate, term overlap selects a short original passage and an E5 window can supply a second, non-overlapping passage. Rank contributions remain visible in the exploration interface. All methods execute within the single search tool.
+
+\begin{table}[h]\centering
+\caption{Reference-string coverage in up to five retrieved documents' returned passages. Every configuration receives the same original question.}
+\begin{tabular}{lrr}\toprule
+Method & Covered & Questions\\\midrule
+\RetrievalRows
+\bottomrule\end{tabular}
+\end{table}
+\subsection{Interpretation}
+\RetrievalInterpretation{} A hit requires a normalized reference string to occur with word boundaries in a returned passage. This measure can miss a valid paraphrase and can reward an incidental appearance of a common name. It does not establish that the relation requested by the question has been proved. No official evidence labels or test answers enter this calculation. Per-question rankings, source windows and offsets are saved so individual wins and regressions can be inspected.
+\input{retrieval-analysis}
+\clearpage
+\section{Decision loop and reusable skills}
+\subsection{Tools and state}
+The agent receives three callable tool types. \texttt{search} takes a query and an optional evidence-seeking instruction; its output contains ranked IDs, scores and source windows. \texttt{read\_document} takes a previously returned ID and an optional offset or focus phrase. It supplies original text before and after the hit. \texttt{load\_skill} accepts a name from the discovered skill catalog and reads its instructions at runtime. Search engine internals do not dispatch extra model tools.
+
+The state tracks queries, visited documents, a provisional candidate, unresolved constraints, evidence IDs and loaded skills. Each evidence ID identifies the document and character span. A tool call can explicitly retain evidence to support or challenge a candidate. The compact prompt prioritizes selected quotations, then recent passages, and also includes the most recent actual tool exchange. Duplicates with the same document and position are merged. The trace stores full exchanges together with context projections, so trimming future prompts does not erase an earlier action. Raw messages used by the unmanaged comparison remain available in that configuration.
+
+An eight-call default bounds the full agent. Simpler questions can stop earlier. Following a budget stop the model must produce the best answer it can support using the available evidence. The final response contains only the requested entity or attribute; citations and the trail remain available through the interface. A missing provider usage object or incomplete model response prevents the production of a purportedly valid prediction.
+\subsection{Procedures and automatic selection}
+The \texttt{follow-clues} skill handles a missing bridge entity. It asks the model to identify the answer type, search a distinctive clue, check that the original words support the inferred relation, and only then use the discovered spelling in a new query. Mere co-occurrence is insufficient. The output is a chain of supported relationships and a remaining gap, if any.
+
+The \texttt{resolve-entity} skill addresses conflicting names or identities. It asks for a discriminating attribute, such as an appointment date or award category, and records whether a source supports, contradicts or does not mention the constraint. A missing mention leaves a candidate unresolved. The next query focuses on the attribute separating the survivors. Both skills use the same tools, but they change the information sought.
+
+The catalog reads YAML names and descriptions from the directories. Full Markdown instructions are retrieved only upon an actual model tool call. The model may select neither skill, select one after a first search, or change skills as its state evolves. Loading a skill is recorded and counted. The organization follows the Agent Skills specification \cite{skills}. \SkillObservations
+\subsection{Agent configuration comparison}
+The experiment runner compares A (BM25, one search), B (fusion, one search), C (iterative fusion), D (C with compact context), and E (D with automatic skills). IDs are sorted and shuffled with seed 5423 before the 70/30 development/holdout division. A and B share a single-search budget; C through E share the same maximum. Exact match lowercases, strips punctuation and English articles, and normalizes whitespace. \AgentMetrics
+\clearpage
+\section{User interface and verification}
+\begin{figure}[h]\centering\includegraphics[width=\columnwidth]{figures/retrieval.png}
+\caption{A captured run of the local search interface showing fused ranks, a source ID, a passage, and its URL.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=\columnwidth]{figures/evidence.png}
+\caption{Expanding an actual candidate shows the original context and offsets. A passage can be inspected independently of its fusion rank.}\end{figure}
+The workspace offers question answering, collection exploration and JSONL replay. The question-answering view reports the final text, selected skills and per-question usage. In replay, it shows the observed calls and their results chronologically; evidence is drawn from a returned passage. The collection view allows the user to inspect a retrieval failure before involving an API. It uses the same three search methods as the full configuration.
+
+\subsection{Evaluation and failure handling}
+The trace pairs every tool result to the assistant call that produced it. The validator recomputes call counts from assistant requests, recomputes token totals from every assistant usage record, and requires the final message to match the exported answer. It checks the original question and the complete set of expected test IDs. A changed configuration, index generation or question set requires a new checkpoint directory, preventing accidental mixing of runs. No estimates are substituted for missing API statistics.
+
+Three offline regression cases check source offsets and missing IDs, interruption between a model response and its tool execution, and runtime skill lookup. The interruption test checks both usage and duplicate-call handling with a scripted provider confined to unit tests. Two additional transport tests exercise both service-specific request contracts and an unsupported provider setting. These are engineering checks. Only an actual course-model response can support the final numerical performance claim.
+
+\subsection{Limitations and next evidence}
+A document-level dense hit may cite an early mention that omits the target relation. A lexical window can favor overlapping terms and overlook an alias. The opening/midpoint E5 index reduces construction costs but can miss evidence appearing late in long documents. The agent can request additional text around a known offset or query a previously discovered name to recover. Whether that extra call pays for itself depends on improved answer accuracy relative to its additional tool and token costs. The independent ranking metric is not available locally because it also depends on the other eligible groups.
+
+\paragraph{Assistance and review.} OpenAI Codex assisted with drafting the implementation, experiments and report. The group contribution statement and approval belong to the actual members. \StatusFooter
+\clearpage
+\begin{thebibliography}{4}
+\bibitem{browse} Z. Chen et al. BrowseComp-Plus: A Fair and Disentangled Evaluation Benchmark for Deep Search Agents. ACL, 2026. \url{https://github.com/texttron/BrowseComp-Plus}
+\bibitem{e5} Intfloat. Multilingual E5-small model card. \url{https://huggingface.co/intfloat/multilingual-e5-small}
+\bibitem{qwen} Qwen. Qwen3-Embedding-0.6B model card. \url{https://huggingface.co/Qwen/Qwen3-Embedding-0.6B}
+\bibitem{skills} Agent Skills specification. \url{https://agentskills.io/specification}
+\end{thebibliography}
+\input{contributions}
+\end{document}

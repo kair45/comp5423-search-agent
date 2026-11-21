@@ -1,0 +1,9 @@
+{
+  "group": "YOUR-GROUP-NUMBER",
+  "members": [
+    {"name":"Member 1 full name","role":"Actual contribution","percent":null,"signature":"signatures/member1.png"},
+    {"name":"Member 2 full name","role":"Actual contribution","percent":null,"signature":"signatures/member2.png"},
+    {"name":"Member 3 full name","role":"Actual contribution","percent":null,"signature":"signatures/member3.png"},
+    {"name":"Member 4 full name","role":"Actual contribution","percent":null,"signature":"signatures/member4.png"}
+  ]
+}

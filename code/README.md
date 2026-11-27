@@ -44,7 +44,7 @@ fetch-public.ps1 下载 code/public-revisions.json 固定版本的课程验证�
     .\code\run.ps1 verify data/test.jsonl deliverables/test_prediction.jsonl
     .\code\run.ps1 score data/validation/validation.jsonl runs/holdout/E.jsonl --split holdout
 
-请在命令行使用的 Python 与运行界面的 Python 保持一致。在非 Windows 系统使用 python code/main.py 替换 run.ps1；可通过 PowerShell 7 下载依赖数据。默认配置 E 综合使用三个检索方法、迭代控制、证据状态与原创技能。A/B 单轮，C 加入迭代，D 加入上下文管理。生成程序忽略输入文件的参考答案，验证评分器单独读取。API 超时、无用量、模型错误或断网会保留已接收的检查点，重新运行原命令即恢复。固定配置和索引版本；如改变配置，使用新的输出文件名。整批完成后发布 JSONL。
+请在命令行使用的 Python 与运行界面的 Python 保持一致。在非 Windows 系统使用 python code/main.py 替换 run.ps1；可通过 PowerShell 7 下载依赖数据。默认配置 E 综合使用三个检索方法、迭代控制、证据状态与原创技能。A/B 单轮，C 加入迭代，D 加入上下文管理。生成程序忽略输入文件的参考答案，验证评分器单独读取。服务商因长度截断的回复会连同用量保留，未完成的工具参数不会执行。超出预算的完整工具请求会记录错误并计入调用次数。API 超时、无用量、模型错误或断网会保留已接收的检查点，重新运行原命令即恢复。固定配置和索引版本；如改变配置，使用新的输出文件名。整批完成后发布 JSONL。
 
 批处理默认逐题运行。在 PowerShell 设置 `$env:COMP5423_WORKERS='6'` 即可并行处理六道独立问题，输出仍按题目原始顺序排列。若模型给出带大段解释的草稿，智能体会让同一模型单独提取答案，草稿和提取调用的返回用量都保存在轨迹中。
 

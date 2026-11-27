@@ -32,7 +32,7 @@ class Provider:
             raise ValueError(f"Fill {name} in the project .env to enable agent answers.")
         self.http=requests.Session()
     def complete(self,messages,tools,choice=None):
-        payload={"model":self.model,"messages":messages,"max_tokens":1200,"temperature":0,"enable_thinking":False}
+        payload={"model":self.model,"messages":messages,"max_tokens":3072,"temperature":0,"enable_thinking":False}
         if tools:
             payload["tools"]=tools
             if choice: payload["tool_choice"]=choice
@@ -55,6 +55,6 @@ class Provider:
         if type(usage.get("total_tokens")) is not int or usage["total_tokens"]<0:
             raise ValueError("Missing provider-reported usage.total_tokens; the run cannot be scored.")
         result=body["choices"][0]
-        if result.get("finish_reason") not in ("stop","tool_calls"):
+        if result.get("finish_reason") not in ("stop","tool_calls","length"):
             raise ValueError("Incomplete LLM response: "+str(result.get("finish_reason")))
-        return result["message"],usage,{"model":body.get("model"),"response_id":body.get("id")}
+        return result["message"],usage,{"model":body.get("model"),"response_id":body.get("id"),"finish_reason":result.get("finish_reason")}

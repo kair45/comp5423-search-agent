@@ -62,12 +62,37 @@ def main():
                     if s.get("role")=="tool" and s["name"]=="load_skill":
                         name=json.loads(s["content"]).get("name")
                         if name and name not in cases: cases[name]=r
-            chosen=list({r["id"]:r for r in cases.values()}.values())[:2] or rows[:1]
+            chosen=list({r["id"]:r for r in cases.values()}.values())[:2]
+            test_ids=set()
+            test_file=ROOT/"deliverables/test_prediction.jsonl"
+            if not chosen and test_file.exists():
+                from searchkit.runs import verify,questions
+                test=verify(test_file,questions(ROOT/"data/test.jsonl"))
+                example=next((r for r in test.values() if any(s.get("role")=="tool" and s.get("name")=="load_skill" and
+                              json.loads(s["content"]).get("name") for s in r["trajectory"])),None)
+                if example:
+                    chosen.append(example)
+                    test_ids.add(example["id"])
+            if len(chosen)<2:
+                without=next((r for r in rows if not any(s.get("role")=="tool" and s.get("name")=="load_skill" and
+                             json.loads(s["content"]).get("name") for s in r["trajectory"])),None)
+                if without: chosen.append(without)
+            if not chosen: chosen=rows[:1]
             for case in chosen:
                 page.get_by_text("Replay a run",exact=True).click()
                 page.locator('input[type="file"]').set_input_files({"name":"observed.jsonl","mimeType":"application/json","buffer":(json.dumps(case)+"\n").encode()})
+                page.get_by_text(case["question"],exact=True).first.wait_for()
                 page.get_by_role("heading",name="Tool timeline").wait_for()
-                slide("Recorded DeepSeek run | question "+case["id"],"Replay displays the actual final answer, API usage, selected skills and source evidence.",9,"agent.png")
+                page.get_by_role("heading",name="Evidence Search",exact=True).scroll_into_view_if_needed()
+                loaded=[json.loads(s["content"]).get("name") for s in case["trajectory"] if s.get("role")=="tool" and s["name"]=="load_skill"]
+                decision="Loaded "+", ".join(dict.fromkeys(n for n in loaded if n)) if any(loaded) else "No skill loaded"
+                dataset="test" if case["id"] in test_ids else "validation"
+                slide("Recorded DeepSeek run | "+dataset+" question "+case["id"],f"{decision}. The agent issued {case['tool_calls']} calls and used {case['total_tokens']:,} tokens.",9,"agent.png")
+                if any(loaded):
+                    result=page.get_by_text("← load_skill",exact=True).first
+                    result.click()
+                    result.scroll_into_view_if_needed()
+                    slide("Reading a skill at runtime","The model chose this procedure. The tool returned the instructions stored in its SKILL.md file.",7)
                 action=page.get_by_text("→ search",exact=True).last
                 action.click();action.scroll_into_view_if_needed()
                 slide("Result-dependent action","This search argument comes from a recorded model tool call. Complete messages are included in the JSONL.",8)

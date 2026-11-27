@@ -77,6 +77,24 @@ class CourseTests(unittest.TestCase):
         self.assertEqual(provider.requests[-1][1],[])
         self.assertEqual(json.loads(provider.requests[-1][0][-1]["content"])["draft"],draft)
 
+    def test_truncated_tool_fragment_is_counted_and_never_executed(self):
+        fragment={"id":"cut","type":"function","function":{"name":"search","arguments":"{"}}
+        complete={"id":"done","type":"function","function":{"name":"search","arguments":json.dumps({"query":"designer"})}}
+        class TruncatedProvider:
+            def __init__(self):
+                self.messages=iter([({"tool_calls":[fragment]},"length"),({"tool_calls":[complete]},"tool_calls"),({"content":"Ada Grey"},"stop")])
+            def complete(self,messages,tools,choice):
+                for item in messages:
+                    self_tools=item.get("tool_calls") or []
+                    if any(c["id"]=="cut" for c in self_tools): raise AssertionError("Replayed an incomplete call")
+                msg,reason=next(self.messages)
+                return {"role":"assistant",**msg},{"total_tokens":7},{"finish_reason":reason}
+        for profile in ("A","E"):
+            agent=Agent(self.engine,TruncatedProvider(),SKILLS,profile=profile,budget=1)
+            row=agent.run("q","Who designed the instrument?")
+            validate(row,"q",row["question"])
+            self.assertEqual((row["tool_calls"],row["total_tokens"],row["answer"]),(1,21,"Ada Grey"))
+
     def test_catalog_and_conflict_skill(self):
         agent=Agent(self.engine,None,SKILLS)
         mem=agent.initial("q","q")["memory"]

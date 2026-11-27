@@ -47,6 +47,9 @@ def show_record(row):
         for step in trace:
             if step.get("event")=="context":
                 with st.expander("Working state"): st.json(step["state"])
+            if step.get("api",{}).get("finish_reason")=="length":
+                st.caption("Incomplete model reply; its token usage is included.")
+                continue
             for call in step.get("tool_calls") or []:
                 with st.expander("→ "+call["function"]["name"]): st.code(call["function"]["arguments"],language="json")
             if step.get("role")=="tool":

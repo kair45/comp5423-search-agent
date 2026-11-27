@@ -57,6 +57,7 @@ def validate(record,ident,question):
             value=step["usage"]["total_tokens"]
             if type(value)!=int or value<0: raise ValueError("Invalid usage")
             tokens+=value
+            if step.get("api",{}).get("finish_reason")=="length": continue
             for call in step.get("tool_calls") or []:
                 cid=call["id"]; name=call["function"]["name"]; json.loads(call["function"]["arguments"])
                 if not isinstance(cid,str) or not cid or cid in seen: raise ValueError("Duplicate or missing tool-call ID")

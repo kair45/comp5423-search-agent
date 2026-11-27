@@ -68,17 +68,50 @@ def main():
         m=json.loads(a.metrics.read_text(encoding="utf-8"));config=r"\par\smallskip\begin{tabular}{lrrr}\toprule Config. & EM (\%) & Calls & Tokens\\\midrule "+"\n"
         for key,obj in m.items():config+=f"{tex(key)} & {obj['normalized_em_percent']:.2f} & {obj['tool_calls']} & {obj['total_tokens']}"+r"\\"+"\n"
         config+=r"\bottomrule\end{tabular}\par"
+        if all(k in m for k in "ABCDE"):
+            a0,b,c,d,e=(m[k] for k in "ABCDE")
+            config+=(f" On the same {e['questions']} questions, switching from lexical search to rank fusion "
+                     f"changed the correct-answer count from {a0['correct']} to {b['correct']}. "
+                     f"Allowing iteration yielded {c['correct']} correct. With compact context, "
+                     f"the agent answered {d['correct']} correctly. Enabling the skills produced {e['correct']}. "
+                     f"Mean token use per question was {d['total_tokens']/d['questions']:,.0f} for D "
+                     f"and {e['total_tokens']/e['questions']:,.0f} for E. "
+                     "A difference of one correct answer moves EM by 3.33 percentage points on this split.")
     obs="Real selection examples require recorded agent runs; the retrieval-only experiment does not exercise either procedure."
     if a.cases:
         val=verify(a.cases,questions(data/"validation/validation.jsonl","holdout"))
         byskill={}
+        selections={}
         for row in val.values():
             for s in row["trajectory"]:
                 if s.get("role")=="tool" and s["name"]=="load_skill":
                     n=json.loads(s["content"]).get("name")
                     if n and n not in byskill:byskill[n]=row["id"]
+                    if n:selections.setdefault(row["id"],set()).add(n)
         if byskill: obs="Observed validation decisions: "+", ".join(tex(n)+" on question "+tex(i) for n,i in byskill.items())+"."
         else: obs="No skill loads occurred in this recorded holdout run."
+        without=[ident for ident in val if ident not in selections]
+        if selections and without:
+            obs+=f" In all, {len(selections)} of {len(val)} questions loaded a skill. Question {tex(without[0])} ran without loading either procedure."
+        test_file=ROOT/"deliverables/test_prediction.jsonl"
+        if test_file.exists():
+            test=verify(test_file,questions(data/"test.jsonl"))
+            examples={}
+            for row in test.values():
+                for step in row["trajectory"]:
+                    if step.get("role")=="tool" and step["name"]=="load_skill":
+                        name=json.loads(step["content"]).get("name")
+                        if name:examples.setdefault(name,[]).append(row["id"])
+            for name,ids in sorted(examples.items()):
+                obs+=f" In the separate test set, {tex(name)} was loaded on {len(set(ids))} distinct questions (for example, ID {tex(ids[0])})."
+            if "resolve-entity" not in examples and "resolve-entity" not in byskill:
+                obs+=" Neither recorded evaluation demonstrated automatic loading of resolve-entity."
+        correct_ids=[i for i,row in val.items() if normalized(row["answer"])==ref[i]]
+        missed_ids=[i for i in val if i not in correct_ids]
+        if correct_ids and missed_ids and a.metrics:
+            good,miss=val[correct_ids[0]],val[missed_ids[0]]
+            config+=(f" On validation question {tex(good['id'])}, E matched the reference using {good['tool_calls']} tool requests. "
+                     f"On {tex(miss['id'])}, {miss['tool_calls']} requests produced a different answer.")
     completed=bool(group and a.metrics and a.cases)
     macros={"ReportGroup":"Group "+tex(group["group"]) if group else "Group details pending",
       "RunStatus":"Provider experiments are reported below." if a.metrics else "The measured experiment here evaluates retrieval on all 100 validation questions; end-to-end API results are pending.",

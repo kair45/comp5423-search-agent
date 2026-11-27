@@ -51,6 +51,32 @@ class CourseTests(unittest.TestCase):
         self.assertTrue(any(s.get("event")=="context" for s in row["trajectory"]))
         row["tool_calls"]=0
         with self.assertRaises(ValueError): validate(row,"q",row["question"])
+    def test_formatting_resumes_without_repeating_provider_work(self):
+        draft="The requested answer is **Ada Grey**.\\n\\nThe document names the designer."
+        search={"id":"once","type":"function","function":{"name":"search","arguments":json.dumps({"query":"designer"})}}
+        class FormattingProvider:
+            def __init__(self):
+                self.responses=iter([{"role":"assistant","tool_calls":[search]}, {"role":"assistant","content":draft},
+                                     {"role":"assistant","content":"Ada Grey"}])
+                self.requests=[]
+            def complete(self,messages,tools,choice):
+                self.requests.append((messages,tools))
+                return next(self.responses),{"total_tokens":7},{"model":"unit-test"}
+        provider=FormattingProvider()
+        agent=Agent(self.engine,provider,SKILLS,profile="A")
+        checkpoint=[]
+        def interrupt(state):
+            if state.get("format_draft") and state["answer"] is None:
+                checkpoint.append(json.loads(json.dumps(state)))
+                raise InterruptedError()
+        question="Who designed the instrument?"
+        with self.assertRaises(InterruptedError): agent.run("q",question,save=interrupt)
+        row=agent.run("q",question,checkpoint[0])
+        validate(row,"q",question)
+        self.assertEqual((row["answer"],row["tool_calls"],row["total_tokens"]),("Ada Grey",1,21))
+        self.assertEqual(provider.requests[-1][1],[])
+        self.assertEqual(json.loads(provider.requests[-1][0][-1]["content"])["draft"],draft)
+
     def test_catalog_and_conflict_skill(self):
         agent=Agent(self.engine,None,SKILLS)
         mem=agent.initial("q","q")["memory"]

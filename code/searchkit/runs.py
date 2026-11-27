@@ -1,5 +1,8 @@
 """Validation, normalization and resumable question-level execution."""
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+from threading import local
 import hashlib
 import json
 from pathlib import Path
@@ -77,7 +80,9 @@ def verify(path,items):
 def run_batch(data,items,out,profile,budget):
     if not items: raise ValueError("Empty input")
     provider=Provider(); retrieval=Retrieval(data,CONFIGS[profile][0])
-    agent=Agent(retrieval,provider,SKILLS,profile,budget)
+    workers=int(os.environ.get("COMP5423_WORKERS","1"))
+    if not 1<=workers<=12: raise ValueError("COMP5423_WORKERS must be between 1 and 12")
+    thread_state=local()
     out=Path(out); out.parent.mkdir(parents=True,exist_ok=True)
     job=out.parent/(out.name+".state"); job.mkdir(exist_ok=True)
     fingerprint={"questions":hashlib.sha256(dumps(items).encode()).hexdigest(),"model":provider.model,"endpoint":provider.base,
@@ -91,13 +96,29 @@ def run_batch(data,items,out,profile,budget):
             raise ValueError("Run inputs/config changed. Choose a new output file.")
         if not manifest.exists() and out.exists(): raise FileExistsError("Untracked output already exists")
         atomic_text(manifest,dumps(fingerprint))
-        complete=[]
-        for i,(ident,q) in enumerate(items,1):
+        def predict(item):
+            ident,q=item
+            if not hasattr(thread_state,"agent"):
+                thread_state.agent=Agent(retrieval,Provider(),SKILLS,profile,budget)
             path=job/(hashlib.sha256(ident.encode()).hexdigest()+".json")
             state=json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
-            row=agent.run(ident,q,state,lambda s:atomic_text(path,dumps(s)))
-            validate(row,ident,q); complete.append(row)
-            print(f"{i}/{len(items)} {ident} calls={row['tool_calls']} tokens={row['total_tokens']}",flush=True)
+            row=thread_state.agent.run(ident,q,state,lambda s:atomic_text(path,dumps(s)))
+            validate(row,ident,q)
+            return row
+        pool=ThreadPoolExecutor(max_workers=workers)
+        futures={}
+        try:
+            futures={pool.submit(predict,item):i for i,item in enumerate(items)}
+            complete=[None]*len(items)
+            for count,future in enumerate(as_completed(futures),1):
+                row=future.result()
+                complete[futures[future]]=row
+                print(f"{count}/{len(items)} {row['id']} calls={row['tool_calls']} tokens={row['total_tokens']}",flush=True)
+        finally:
+            pool.shutdown(wait=True,cancel_futures=True)
+            retrieval.rank_cached.cache_clear()
+            retrieval.store.con.close()
+            retrieval.dense.clear()
         atomic_text(out,"".join(dumps(r)+"\n" for r in complete))
         verify(out,items)
     return complete

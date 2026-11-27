@@ -86,7 +86,7 @@ class Agent:
         if self.budget<1: raise ValueError("Positive tool-call budget required")
         self.skills=catalog(skill_root) if active else {}
         self.tools=schemas(self.skills)
-        self.system=SYSTEM+("\nAvailable optional skills. Decide when to load one using load_skill; a direct question may need none.\n"+dumps(self.skills) if self.skills else "")
+        self.system=SYSTEM+("\nAvailable optional skills. For multi-hop identification or ambiguous entities, load the corresponding skill early and follow its instructions. A direct question may need none.\n"+dumps(self.skills) if self.skills else "")
     def initial(self,ident,question):
         return {"id":ident,"question":question,"trace":[{"role":"system","content":self.system},{"role":"user","content":question}],
                 "memory":{"visited":[],"queries":[],"evidence":{},"candidate":"","unresolved":[],"selected":[],"skills":{},"calls":0,"searches":0},
@@ -158,8 +158,14 @@ class Agent:
             if exhausted:
                 if not mem["searches"]: raise ValueError("Budget exhausted without successful search")
                 messages=messages+[{"role":"user","content":"Tool budget reached. Return only the best supported answer now."}]
+            if self.iterative and not exhausted and mem["searches"] >= 2 and not mem["visited"]:
+                messages=messages+[{"role":"user","content":"Check the earlier queries before using another call. Inspect a promising document or isolate a distinctive clue from a new angle. If the answer is supported, return just the requested value."}]
+            formatting=bool(run.get("format_draft"))
+            if formatting:
+                messages=[{"role":"system","content":"Extract the answer proposed in the draft. Return only the requested name, date, value, or list, in plain text. Preserve its wording. Omit headings, Markdown, reasoning and citations."},
+                          {"role":"user","content":dumps({"question":question,"draft":run["format_draft"]})}]
             first=mem["searches"]==0
-            available=[] if exhausted else self.tools
+            available=[] if exhausted or formatting else self.tools
             # A single-tool baseline must spend its sole call on actual retrieval.
             choice={"type":"function","function":{"name":"search"}} if first and (not self.iterative or mem["calls"] or mem.get("corrections")) else None
             if first and self.iterative and not mem["calls"] and not mem.get("corrections"):
@@ -172,19 +178,24 @@ class Agent:
             msg,usage,meta=self.provider.complete(messages,available,"auto" if available else None)
             calls=msg.get("tool_calls") or []
             if calls:
-                if exhausted: raise ValueError("Provider returned calls after tools were disabled")
+                if not available: raise ValueError("Provider returned calls after tools were disabled")
                 ids=[c["id"] for c in calls]
                 if len(set(ids))!=len(ids) or any(not isinstance(c.get("function",{}).get("arguments"),str) for c in calls):
                     raise ValueError("Malformed provider tool calls")
             final=(msg.get("content") or "").strip()
 
-            if self.managed and mem["calls"]:
+            if formatting:
+                trace.append({"event":"context","state":compact(mem,self.budget),"messages":messages})
+            elif self.managed and mem["calls"]:
                 trace.append({"event":"context","state":compact(mem,self.budget),"messages":messages[2:]})
             trace.append({**msg,"usage":usage,"api":meta})
             run["pending"]=list(calls)
             if not calls:
                 if final and mem["searches"]:
-                    run["answer"]=msg["content"]
+                    if not formatting and (len(final)>300 or "\n\n" in final or "**" in final):
+                        run["format_draft"]=msg["content"]
+                    else:
+                        run["answer"]=msg["content"]
                 else:
                     mem["corrections"]=mem.get("corrections",0)+1
                     feedback="Call search now, using the question's most distinctive clue." if not mem["searches"] else "Return the supported answer as nonempty text."

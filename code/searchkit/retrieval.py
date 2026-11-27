@@ -1,5 +1,6 @@
 from collections import defaultdict
 from functools import lru_cache
+from threading import Lock
 from pathlib import Path
 
 from .store import Store, locate
@@ -9,11 +10,13 @@ class Retrieval:
         self.data=Path(data); self.store=Store(self.data/"index"); self.methods=tuple(methods)
         if not self.methods or set(self.methods)-{"bm25","e5","qwen"}: raise ValueError("Unknown retrieval method")
         self.dense={}
+        self.search_lock=Lock()
+        self.rank_cached=lru_cache(maxsize=128)(self._rank)
     def search(self, query, intent="", top=5, depth=30):
         if not isinstance(query,str) or not query.strip(): raise ValueError("Supply a nonempty search query")
         if not (1<=top<=depth<=100): raise ValueError("Expected 1 <= top <= depth <= 100")
-        return self._rank(query.strip(),intent.strip(),top,depth)
-    @lru_cache(maxsize=128)
+        with self.search_lock:
+            return self.rank_cached(query.strip(),intent.strip(),top,depth)
     def _rank(self,query,intent,top,depth):
         ranks=defaultdict(dict); score=defaultdict(float); anchors={}
         for method in self.methods:

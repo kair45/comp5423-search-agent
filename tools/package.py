@@ -10,8 +10,8 @@ sys.path.insert(0,str(ROOT/"code"))
 from searchkit.runs import verify,questions
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument("--group");p.add_argument("--source-only",action="store_true");a=p.parse_args()
-    dest=ROOT/"deliverables";dest.mkdir(exist_ok=True)
+    p=argparse.ArgumentParser();p.add_argument("--group");p.add_argument("--source-only",action="store_true");p.add_argument("--output-dir",type=Path,default=ROOT/"deliverables");a=p.parse_args()
+    dest=a.output_dir;dest.mkdir(parents=True,exist_ok=True)
     extras={}
     if a.source_only: name="Source.zip"
     else:

@@ -42,13 +42,17 @@ fetch-public.ps1 下载 code/public-revisions.json 固定版本的课程验证�
     .\code\run.ps1 experiment data/validation/validation.jsonl runs/holdout --split holdout
     .\code\run.ps1 batch data/test.jsonl deliverables/test_prediction.jsonl
     .\code\run.ps1 verify data/test.jsonl deliverables/test_prediction.jsonl
-    .\code\run.ps1 score data/validation/validation.jsonl runs/holdout/E.jsonl --split holdout
+    .\code\run.ps1 score data/validation/validation.jsonl runs/holdout/F.jsonl --split holdout
 
-请在命令行使用的 Python 与运行界面的 Python 保持一致。在非 Windows 系统使用 python code/main.py 替换 run.ps1；可通过 PowerShell 7 下载依赖数据。默认配置 E 综合使用三个检索方法、迭代控制、证据状态与原创技能。A/B 单轮，C 加入迭代，D 加入上下文管理。生成程序忽略输入文件的参考答案，验证评分器单独读取。服务商因长度截断的回复会连同用量保留，未完成的工具参数不会执行。超出预算的完整工具请求会记录错误并计入调用次数。API 超时、无用量、模型错误或断网会保留已接收的检查点，重新运行原命令即恢复。固定配置和索引版本；如改变配置，使用新的输出文件名。整批完成后发布 JSONL。
+请在命令行使用的 Python 与运行界面的 Python 保持一致。在非 Windows 系统使用 python code/main.py 替换 run.ps1；可通过 PowerShell 7 下载依赖数据。默认配置 F 综合使用三个检索方法、迭代控制、证据状态与原创技能，并加入线索双查询与证据原文提取。E 是原始完整配置。A/B 单轮，C 加入迭代，D 加入上下文管理。生成程序忽略输入文件的参考答案，验证评分器单独读取。服务商因长度截断的回复会连同用量保留，未完成的工具参数不会执行。超出预算的完整工具请求会记录错误并计入调用次数。API 超时、无用量、模型错误或断网会保留已接收的检查点，重新运行原命令即恢复。固定配置和索引版本；如改变配置，使用新的输出文件名。整批完成后发布 JSONL。
 
 批处理默认逐题运行。在 PowerShell 设置 `$env:COMP5423_WORKERS='6'` 即可并行处理六道独立问题，输出仍按题目原始顺序排列。若模型给出带大段解释的草稿，智能体会让同一模型单独提取答案，草稿和提取调用的返回用量都保存在轨迹中。
 
 实际 API 返回若在传输中丢失，服务方可能已经计费，本地无法恢复未接收的用量。此类情况会报错；记录只包含服务方已返回的真实消息和用量。
+
+## 优化配置 F
+
+批处理、单题答问和网页答题默认运行 F。使用 `--profile E` 可复现原始配置。首次搜索融合模型给出的独特线索与原题，后续搜索沿用模型根据证据提出的新查询。每个文档返回与当前线索、原题相关的两个不重叠片段；首次检索可补充一个来自原检索器的片段。返回结果包含文档来源和原文偏移。最终答题时优先保留主动选择和已阅读的证据，模型按问题要求引用来源中的拼写和单位。配置 E 保留原来的搜索和证据选择行为。
 
 ## 代码结构
 
@@ -60,6 +64,7 @@ fetch-public.ps1 下载 code/public-revisions.json 固定版本的课程验证�
 | searchkit/dense.py、retrieval.py | E5、Qwen3-Embedding、FAISS、RRF 融合 |
 | searchkit/provider.py、agent.py | 直连模型 API、三种工具、结构化证据状态、按需技能 |
 | searchkit/runs.py、diagnostics.py | 断点恢复、六字段校验、EM、检索片段覆盖率 |
+| searchkit/clues.py | 线索与原题检索融合、精确原文片段与证据选择 |
 | skills/follow-clues、skills/resolve-entity | 多跳线索追踪与候选实体消歧 |
 | test_core.py | 合成离线测试，独立于正式预测 |
 

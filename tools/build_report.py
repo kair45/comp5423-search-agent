@@ -48,7 +48,11 @@ def declare(group):
 def main():
     p=argparse.ArgumentParser();p.add_argument("--group",type=Path);p.add_argument("--metrics",type=Path);p.add_argument("--cases",type=Path)
     p.add_argument("--engine",default="pdflatex");p.add_argument("--output",type=Path,default=ROOT/"deliverables/Project-Report-Draft.pdf")
+    p.add_argument("--test-predictions",type=Path,default=ROOT/"deliverables/test_prediction.jsonl")
+    p.add_argument("--comparison",type=Path)
+    p.add_argument("--development-cases",type=Path)
     a=p.parse_args();group=group_info(a.group)
+    case_profile=tex(a.cases.stem) if a.cases else ""
     data=ROOT/"data";diag=ROOT/"runs/validation-retrieval"
     met=json.loads((diag/"retrieval-metrics.json").read_text(encoding="utf-8"))
     rows=records(diag/"retrieval-queries.jsonl");ref={r["id"]:normalized(r["answer"]) for r in records(data/"validation/validation.jsonl")}
@@ -77,6 +81,24 @@ def main():
                      f"Mean token use per question was {d['total_tokens']/d['questions']:,.0f} for D "
                      f"and {e['total_tokens']/e['questions']:,.0f} for E. "
                      "A difference of one correct answer moves EM by 3.33 percentage points on this split.")
+        if "F" in m:
+            f=m["F"]
+            config+=f" F matched {f['correct']} of {f['questions']} references using {f['tool_calls']} tool requests."
+        if a.comparison:
+            comparison=json.loads(a.comparison.read_text(encoding="utf-8"))
+            cmp=comparison["dev"]
+            base,new=cmp["baseline"],cmp["candidate"]
+            config+=(f" On the separate {new['questions']}-question development split, E completed {base['completed']} "
+                     f"and matched {base['correct']}. F completed {new['completed']} and matched {new['correct']}. "
+                     f"Among the {cmp['both_completed']} paired completions, F gained {cmp['gained_on_common']} correct answers "
+                     f"and lost {cmp['lost_on_common']}. The 30-question split had previously been inspected for error diagnosis.")
+            audit=comparison.get("holdout")
+            if audit:
+                old,new=audit["baseline"],audit["candidate"]
+                config+=(f" On those 30 questions F gained {audit['gained_on_common']} matches and lost {audit['lost_on_common']} "
+                         f"relative to E. Retrieved snippets or document reads contained the normalized reference for "
+                         f"{new['visible_reference']} questions with F and {old['visible_reference']} with E. A literal occurrence need not establish the answer.")
+
     obs="Real selection examples require recorded agent runs; the retrieval-only experiment does not exercise either procedure."
     if a.cases:
         val=verify(a.cases,questions(data/"validation/validation.jsonl","holdout"))
@@ -93,7 +115,19 @@ def main():
         without=[ident for ident in val if ident not in selections]
         if selections and without:
             obs+=f" In all, {len(selections)} of {len(val)} questions loaded a skill. Question {tex(without[0])} ran without loading either procedure."
-        test_file=ROOT/"deliverables/test_prediction.jsonl"
+        if a.development_cases:
+            dev=verify(a.development_cases,questions(data/"validation/validation.jsonl","dev"))
+            loaded={}
+            for ident,row in dev.items():
+                for step in row["trajectory"]:
+                    if step.get("role")=="tool" and step.get("name")=="load_skill":
+                        name=json.loads(step["content"]).get("name")
+                        if name:loaded.setdefault(name,set()).add(ident)
+            for name,ids in sorted(loaded.items()):
+                obs+=f" On the development split, {tex(name)} was loaded on {len(ids)} questions, including ID {tex(sorted(ids)[0])}."
+            if loaded and without:
+                obs+=f" Holdout question {tex(without[0])} ran without a skill."
+        test_file=a.test_predictions
         if test_file.exists():
             test=verify(test_file,questions(data/"test.jsonl"))
             examples={}
@@ -102,15 +136,16 @@ def main():
                     if step.get("role")=="tool" and step["name"]=="load_skill":
                         name=json.loads(step["content"]).get("name")
                         if name:examples.setdefault(name,[]).append(row["id"])
+            if not examples: obs+=f" The agent also completed all {len(test)} test questions without loading a skill."
             for name,ids in sorted(examples.items()):
                 obs+=f" In the separate test set, {tex(name)} was loaded on {len(set(ids))} distinct questions (for example, ID {tex(ids[0])})."
             if "resolve-entity" not in examples and "resolve-entity" not in byskill:
-                obs+=" Neither recorded evaluation demonstrated automatic loading of resolve-entity."
+                obs+=" The test and holdout runs did not demonstrate automatic loading of resolve-entity."
         correct_ids=[i for i,row in val.items() if normalized(row["answer"])==ref[i]]
         missed_ids=[i for i in val if i not in correct_ids]
         if correct_ids and missed_ids and a.metrics:
             good,miss=val[correct_ids[0]],val[missed_ids[0]]
-            config+=(f" On validation question {tex(good['id'])}, E matched the reference using {good['tool_calls']} tool requests. "
+            config+=(f" On validation question {tex(good['id'])}, {case_profile} matched the reference using {good['tool_calls']} tool requests. "
                      f"On {tex(miss['id'])}, {miss['tool_calls']} requests produced a different answer.")
     completed=bool(group and a.metrics and a.cases)
     macros={"ReportGroup":"Group "+tex(group["group"]) if group else "Group details pending",

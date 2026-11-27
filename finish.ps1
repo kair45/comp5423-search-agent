@@ -1,4 +1,4 @@
-param([string]$GroupFile,[string]$Chrome,[string]$FFmpeg='ffmpeg')
+param([string]$GroupFile,[string]$Chrome,[string]$FFmpeg='ffmpeg',[string]$OutputDir,[string]$ExperimentDir,[string]$Comparison)
 $ErrorActionPreference='Stop'
 $root=$PSScriptRoot
 $py=Join-Path $root '.venv/Scripts/python.exe'
@@ -7,11 +7,13 @@ $env:PYTHONUTF8='1'
 function RunPy([string[]]$Argv) { & $py @Argv; if($LASTEXITCODE -ne 0){throw "Step failed: $($Argv[0])"} }
 $main=Join-Path $root 'code/main.py'
 $data=Join-Path $root 'data'
-$out=[IO.Directory]::CreateDirectory((Join-Path $root 'deliverables')).FullName
-$exp=Join-Path $root 'runs/holdout'
-RunPy @($main,'batch',"$data/test.jsonl","$out/test_prediction.jsonl")
+if(!$OutputDir){$OutputDir=Join-Path $root 'deliverables'}
+$out=[IO.Directory]::CreateDirectory($OutputDir).FullName
+if(!$ExperimentDir){$ExperimentDir=Join-Path $root 'runs/holdout'}
+$exp=[IO.Directory]::CreateDirectory($ExperimentDir).FullName
+RunPy @($main,'batch',"$data/test.jsonl","$out/test_prediction.jsonl",'--profile','F')
 RunPy @($main,'verify',"$data/test.jsonl","$out/test_prediction.jsonl")
-RunPy @($main,'experiment',"$data/validation/validation.jsonl",$exp,'--split','holdout')
+RunPy @($main,'experiment',"$data/validation/validation.jsonl",$exp,'--split','holdout','--profiles','ABCDEF','--reuse-profiles','ABCDE')
 $prefix=if($GroupFile){
     $GroupFile=(Resolve-Path -LiteralPath $GroupFile).Path
     $groupId=(Get-Content -Raw -Encoding utf8 -LiteralPath $GroupFile | ConvertFrom-Json).group
@@ -38,11 +40,16 @@ try {
         Start-Sleep -Seconds 1
     }
     if(!$ready){throw 'Local UI startup timed out'}
-    $demo=@((Join-Path $root 'tools/demo_capture.py'),'--url',"http://127.0.0.1:$port",'--ffmpeg',$FFmpeg,'--predictions',"$exp/E.jsonl",'--output',"$out/$prefix-Video.mp4")
+    $demo=@((Join-Path $root 'tools/demo_capture.py'),'--url',"http://127.0.0.1:$port",'--ffmpeg',$FFmpeg,'--predictions',"$exp/F.jsonl",'--test-predictions',"$out/test_prediction.jsonl",'--output',"$out/$prefix-Video.mp4")
+    $devCases=Join-Path $root 'runs/optimization/candidate-dev/F.jsonl'
+    if(Test-Path -LiteralPath $devCases){$demo+=@('--development-cases',$devCases)}
     if($Chrome){$demo+=@('--chrome',$Chrome)}
     RunPy $demo
 } finally {if(!$server.HasExited){Stop-Process -Id $server.Id}}
-$report=@((Join-Path $root 'tools/build_report.py'),'--metrics',"$exp/metrics.json",'--cases',"$exp/E.jsonl")
-if($GroupFile){$report+=@('--group',$GroupFile,'--output',"$out/$prefix-Report.pdf")}
+$report=@((Join-Path $root 'tools/build_report.py'),'--metrics',"$exp/metrics.json",'--cases',"$exp/F.jsonl",'--test-predictions',"$out/test_prediction.jsonl")
+if(Test-Path -LiteralPath $devCases){$report+=@('--development-cases',$devCases)}
+if(!$Comparison){$Comparison=Join-Path $root 'runs/optimization/comparison.json'}
+if(Test-Path -LiteralPath $Comparison){$report+=@('--comparison',$Comparison)}
+if($GroupFile){$report+=@('--group',$GroupFile,'--output',"$out/$prefix-Report.pdf")}else{$report+=@('--output',"$out/Project-Report-Draft.pdf")}
 RunPy $report
-if($GroupFile){RunPy @((Join-Path $root 'tools/package.py'),'--group',"$groupId")}
+if($GroupFile){RunPy @((Join-Path $root 'tools/package.py'),'--group',"$groupId",'--output-dir',$out)}

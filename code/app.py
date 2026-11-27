@@ -63,9 +63,9 @@ if choice=="Ask an agent":
         try:
             provider=Provider()
             with st.status("Searching the collection",expanded=True) as status:
-                r,lock=engines("E")
+                r,lock=engines("F")
                 with lock:
-                    row=Agent(r,provider,SKILLS).run("interactive",q,notify=lambda name,result:st.write(name))
+                    row=Agent(r,provider,SKILLS,profile="F").run("interactive",q,notify=lambda name,result:st.write(name))
                 st.session_state["answer"]=row; status.update(label="Answer ready",state="complete",expanded=False)
         except (ValueError,RuntimeError,OSError) as e: st.error(str(e))
     if "answer" in st.session_state: show_record(st.session_state["answer"])

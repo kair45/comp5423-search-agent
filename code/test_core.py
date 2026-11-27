@@ -95,6 +95,42 @@ class CourseTests(unittest.TestCase):
             validate(row,"q",row["question"])
             self.assertEqual((row["tool_calls"],row["total_tokens"],row["answer"]),(1,21,"Ada Grey"))
 
+    def test_focused_search_keeps_sources_and_uses_two_opening_queries(self):
+        from searchkit.clues import search_with_clues, needs_extraction
+        q="Who designed the quartz telescope?"
+        probes,rows=search_with_clues(self.engine,q,"Test Observatory","instrument designer",True)
+        self.assertEqual(probes,["Test Observatory",q])
+        self.assertTrue(rows)
+        for row in rows:
+            text,_=self.engine.store.get(row["doc_id"])
+            self.assertTrue(row["url"])
+            for seg in row["passages"]:
+                self.assertEqual(seg["quote"],text[seg["start"]:seg["end"]])
+        self.assertEqual(search_with_clues(self.engine,q,"Ada Grey","designer",False)[0],["Ada Grey"])
+        self.assertTrue(needs_extraction("The answer is Ada Grey."))
+        self.assertFalse(needs_extraction("Ada Grey"))
+
+    def test_focused_agent_recovers_clipped_prose_from_evidence(self):
+        search={"id":"s","type":"function","function":{"name":"search","arguments":json.dumps({"query":"quartz telescope"})}}
+        class Replies:
+            def __init__(self):
+                self.requests=[]
+                self.answers=iter([({"tool_calls":[search]},"tool_calls"),({"content":"The source names the designer"},"length"),
+                                   ({"content":"Ada Grey"},"stop")])
+            def complete(self,messages,tools,choice):
+                self.requests.append((messages,tools))
+                msg,why=next(self.answers)
+                return {"role":"assistant",**msg},{"total_tokens":11},{"finish_reason":why}
+        provider=Replies()
+        row=Agent(self.engine,provider,SKILLS,profile="F",budget=3).run("q","Who designed the quartz telescope?")
+        validate(row,"q",row["question"])
+        self.assertEqual((row["answer"],row["tool_calls"],row["total_tokens"]),("Ada Grey",1,33))
+        last,tools=provider.requests[-1]
+        self.assertFalse(tools)
+        packet=json.loads(last[1]["content"])
+        self.assertTrue(packet["evidence"])
+        self.assertEqual(packet["draft"],"The source names the designer")
+
     def test_catalog_and_conflict_skill(self):
         agent=Agent(self.engine,None,SKILLS)
         mem=agent.initial("q","q")["memory"]

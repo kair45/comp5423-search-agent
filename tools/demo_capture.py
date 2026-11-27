@@ -14,6 +14,8 @@ def main():
     parser.add_argument("--url",default="http://127.0.0.1:8514")
     parser.add_argument("--chrome");parser.add_argument("--ffmpeg",default="ffmpeg")
     parser.add_argument("--predictions",type=Path);parser.add_argument("--output",type=Path,required=True)
+    parser.add_argument("--development-cases",type=Path)
+    parser.add_argument("--test-predictions",type=Path,default=ROOT/"deliverables/test_prediction.jsonl")
     args=parser.parse_args();args.output.parent.mkdir(parents=True,exist_ok=True)
     figures=ROOT/"report/figures";figures.mkdir(exist_ok=True,parents=True)
     def font(size,bold=False):
@@ -36,7 +38,9 @@ def main():
             canvas=Image.new("RGB",(1320,940),"#143044");canvas.paste(source,(0,0))
             d=ImageDraw.Draw(canvas);d.text((35,833),title,font=font(28,True),fill="white");d.text((35,879),caption,font=font(20),fill="#d5e5ee")
             filename=work/("frame%02d.png"%len(slides));canvas.save(filename);slides.append((filename,seconds))
+        page.emulate_media(reduced_motion="reduce")
         page.goto(args.url)
+        page.add_style_tag(content="*,*::before,*::after{animation-duration:0s!important;transition-duration:0s!important;scroll-behavior:auto!important}")
         page.get_by_role("button",name="Search and answer").wait_for()
         slide("Evidence Search | COMP5423","The interactive workspace and batch generator use the same document store and agent loop.",6,"interface.png")
         page.get_by_text("Explore the collection",exact=True).click()
@@ -53,28 +57,34 @@ def main():
         if args.predictions:
             import sys
             sys.path.insert(0,str(ROOT/"code"))
-            from searchkit.runs import validate
+            from searchkit.runs import normalized,records,validate
+            references={r["id"]:normalized(r["answer"]) for r in records(ROOT/"data/validation/validation.jsonl")}
+            def matched(row):
+                return normalized(row["answer"])==references.get(row["id"])
             rows=[json.loads(line) for line in args.predictions.read_text(encoding="utf-8").splitlines() if line]
             cases={}
-            for r in rows:
+            for r in sorted(rows,key=matched,reverse=True):
                 validate(r,r["id"],r["question"])
                 for s in r["trajectory"]:
                     if s.get("role")=="tool" and s["name"]=="load_skill":
                         name=json.loads(s["content"]).get("name")
                         if name and name not in cases: cases[name]=r
             chosen=list({r["id"]:r for r in cases.values()}.values())[:2]
-            test_ids=set()
-            test_file=ROOT/"deliverables/test_prediction.jsonl"
-            if not chosen and test_file.exists():
-                from searchkit.runs import verify,questions
-                test=verify(test_file,questions(ROOT/"data/test.jsonl"))
-                example=next((r for r in test.values() if any(s.get("role")=="tool" and s.get("name")=="load_skill" and
+            from searchkit.runs import questions,verify
+            case_splits={}
+            other_sources=[(args.development_cases,ROOT/"data/validation/validation.jsonl","dev","development"),
+                           (args.test_predictions,ROOT/"data/test.jsonl","all","test")]
+            for source,data_file,split,label in other_sources:
+                if chosen or source is None or not source.is_file():continue
+                candidates=verify(source,questions(data_file,split))
+                pool=sorted(candidates.values(),key=matched,reverse=True) if split=="dev" else candidates.values()
+                example=next((r for r in pool if any(s.get("role")=="tool" and s.get("name")=="load_skill" and
                               json.loads(s["content"]).get("name") for s in r["trajectory"])),None)
                 if example:
                     chosen.append(example)
-                    test_ids.add(example["id"])
+                    case_splits[example["id"]]=label
             if len(chosen)<2:
-                without=next((r for r in rows if not any(s.get("role")=="tool" and s.get("name")=="load_skill" and
+                without=next((r for r in sorted(rows,key=matched,reverse=True) if not any(s.get("role")=="tool" and s.get("name")=="load_skill" and
                              json.loads(s["content"]).get("name") for s in r["trajectory"])),None)
                 if without: chosen.append(without)
             if not chosen: chosen=rows[:1]
@@ -86,13 +96,22 @@ def main():
                 page.get_by_role("heading",name="Evidence Search",exact=True).scroll_into_view_if_needed()
                 loaded=[json.loads(s["content"]).get("name") for s in case["trajectory"] if s.get("role")=="tool" and s["name"]=="load_skill"]
                 decision="Loaded "+", ".join(dict.fromkeys(n for n in loaded if n)) if any(loaded) else "No skill loaded"
-                dataset="test" if case["id"] in test_ids else "validation"
+                dataset=case_splits.get(case["id"],"validation")
+                if dataset!="test": decision+=". Reference "+("matched" if matched(case) else "differed")
                 slide("Recorded DeepSeek run | "+dataset+" question "+case["id"],f"{decision}. The agent issued {case['tool_calls']} calls and used {case['total_tokens']:,} tokens.",9,"agent.png")
                 if any(loaded):
                     result=page.get_by_text("← load_skill",exact=True).first
                     result.click()
                     result.scroll_into_view_if_needed()
                     slide("Reading a skill at runtime","The model chose this procedure. The tool returned the instructions stored in its SKILL.md file.",7)
+                if case is chosen[0]:
+                    first_search=next((json.loads(s["content"]) for s in case["trajectory"]
+                                       if s.get("role")=="tool" and s.get("name")=="search"),{})
+                    if len(first_search.get("queries",[]))>1:
+                        returned=page.get_by_text("← search",exact=True).first
+                        returned.click()
+                        returned.scroll_into_view_if_needed()
+                        slide("Opening search","One search tool combines a distinctive clue with the original question. Both queries are recorded.",7)
                 action=page.get_by_text("→ search",exact=True).last
                 action.click();action.scroll_into_view_if_needed()
                 slide("Result-dependent action","This search argument comes from a recorded model tool call. Complete messages are included in the JSONL.",8)

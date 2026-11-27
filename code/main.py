@@ -19,10 +19,11 @@ def main():
     ask=sub.add_parser("ask"); ask.add_argument("question"); ask.add_argument("--trace",type=Path)
     batch=sub.add_parser("batch"); batch.add_argument("input",type=Path); batch.add_argument("output",type=Path); batch.add_argument("--limit",type=int)
     for sp in (batch,ask):
-        sp.add_argument("--profile",choices=CONFIGS,default="E");sp.add_argument("--budget",type=int,default=8)
+        sp.add_argument("--profile",choices=CONFIGS,default="F");sp.add_argument("--budget",type=int,default=8)
     check=sub.add_parser("verify");check.add_argument("questions",type=Path);check.add_argument("predictions",type=Path);check.add_argument("--expected",type=int,default=100)
     evaluate=sub.add_parser("score"); evaluate.add_argument("validation",type=Path);evaluate.add_argument("predictions",type=Path)
-    exp=sub.add_parser("experiment");exp.add_argument("validation",type=Path);exp.add_argument("output",type=Path);exp.add_argument("--profiles",default="ABCDE");exp.add_argument("--budget",type=int,default=8)
+    exp=sub.add_parser("experiment");exp.add_argument("validation",type=Path);exp.add_argument("output",type=Path);exp.add_argument("--profiles",default="ABCDEF");exp.add_argument("--budget",type=int,default=8)
+    exp.add_argument("--reuse-profiles",default="",help="Score existing, verified control predictions for these profiles instead of rerunning them.")
     for sp in (batch,evaluate,exp): sp.add_argument("--split",choices=["all","dev","holdout"],default="holdout" if sp is exp else "all")
     a=p.parse_args(); data=a.data; cmd=a.command
     if cmd=="index":
@@ -53,7 +54,8 @@ def main():
         result={}; a.output.mkdir(parents=True,exist_ok=True)
         for profile in a.profiles:
             out=a.output/(profile+".jsonl")
-            run_batch(data,questions(a.validation,a.split),out,profile,a.budget)
+            if profile not in a.reuse_profiles or not out.is_file():
+                run_batch(data,questions(a.validation,a.split),out,profile,a.budget)
             result[profile]=score(out,a.validation,a.split)
             atomic_text(a.output/"metrics.json",dumps(result))
     print(json.dumps(result,ensure_ascii=False,indent=2))
